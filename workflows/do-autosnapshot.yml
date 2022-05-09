@@ -1,0 +1,10 @@
+name: DO Autosnapshot
+on:
+  push:
+  schedule:
+    - cron:  '0 0/15 4 ? * * *'
+jobs:
+  run-script:
+    runs-on: python/3-alpine
+    steps:
+      - run: python3 do-snapshot.py --token ${{ secrets.DO_TOKEN }} -s 1d -k 3d:1d -k 1w:1w -k 1m:2m -k 0d:6m

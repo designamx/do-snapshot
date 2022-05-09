@@ -5,7 +5,7 @@
 """
 do-snapshot.py - snapshot droplets on DigitalOcean
 """
-__version__ = '1.1.0'
+__version__ = '1.2.0'
 
 import sys
 import os
@@ -114,7 +114,7 @@ def apply_retention_policies(args, snapshots, policies, now):
     return sorted(snapshots_by_id.values(), key=lambda s: s['created_at'])
 
 
-def process_droplet(args, droplet, snapshots, policies, min_age, prefix, now):
+def process_device(args, device, device_name, snapshots, policies, min_age, prefix, now):
     """
     Do all the things.  Delete obsolete snapshots, transfer remaining snapshots to
     desired regions, and take a new snapshot if it's time.
@@ -123,7 +123,7 @@ def process_droplet(args, droplet, snapshots, policies, min_age, prefix, now):
     otherwise None.
     """
     for snapshot in snapshots:
-        log.debug('found snapshot %s (%s) for droplet %s', snapshot['name'], snapshot['id'], droplet['name'])
+        log.debug('found snapshot %s (%s) for %s %s', snapshot['name'], snapshot['id'], device_name, device['name'])
 
     # Remove obsolete snapshots
     survivors = apply_retention_policies(args, snapshots, policies, now)
@@ -138,9 +138,14 @@ def process_droplet(args, droplet, snapshots, policies, min_age, prefix, now):
     # Finally take a new snapshot if needed
     if not snapshots or snapshots[-1]['age'] >= min_age:
         snapshot_name = now.strftime(prefix + '%Y%m%dT%H%M%SZ')
-        log.info('snapshotting droplet %s -> %s', droplet['name'], snapshot_name)
-        r = api('post', args.token, 'droplets/{}/actions'.format(droplet['id']),
-            {'type': 'snapshot', 'name': snapshot_name}, dryrun=args.dryrun)
+        log.info('snapshotting %s %s -> %s', device_name, device['name'], snapshot_name)
+        r = False
+        if 'droplets' in device_name:
+            r = api('post', args.token, '{}/{}/actions'.format(device_name, device['id']),
+                {'type': 'snapshot', 'name': snapshot_name}, dryrun=args.dryrun)
+        if 'volumes' in device_name:
+            r = api('post', args.token, '{}/{}/snapshots'.format(device_name, device['id']),
+                {'name': snapshot_name}, dryrun=args.dryrun)
         if r:
             log.debug('snapshot response: %s', r.json())
     else:
@@ -148,13 +153,12 @@ def process_droplet(args, droplet, snapshots, policies, min_age, prefix, now):
         snapshot_name = None
     return survivors, snapshot_name
 
-
 def main():
     p = ArgumentParser()
     p.add_argument('-t', '--tag', dest='tag', default='autosnapshot',
                    help='snapshots droplets with the given tag (default: autosnapshot)')
-    p.add_argument('-p', '--prefix', dest='prefix', default='$droplet-autosnapshot-',
-                   help='prefix for snapshot names (default: $droplet-autosnapshot-')
+    p.add_argument('-p', '--prefix', dest='prefix', default='$do-autosnapshot-',
+                   help='prefix for snapshot names (default: $do-autosnapshot-')
     p.add_argument('-r', '--region', dest='region', action='append', default=[],
                    help='transfer snapshots to this additional region (supports multiple -r)')
     p.add_argument('-s', '--snapshot', dest='snapshot', metavar='AGE', required=True,
@@ -244,13 +248,21 @@ def main():
         r = api('get', args.token, 'droplets?tag_name=' + args.tag)
         droplets = r.json()['droplets']
         log.info('%d droplets found with tag %s', len(droplets), args.tag)
-        for droplet in droplets:
-            r = api('get', args.token, 'droplets/{}/snapshots'.format(droplet['id']))
-            # Filter out non-autosnapshots
-            prefix = args.prefix.replace('$droplet', droplet['name'])
-            snapshots = [snapshot for snapshot in r.json()['snapshots'] if prefix in snapshot['name']]
-            log.info('%d autosnapshots found for droplet %s', len(snapshots), droplet['name'])
-            process_droplet(args, droplet, snapshots, policies, min_age, prefix, now)
+        r = api('get', args.token, 'volumes?tag_name=' + args.tag)
+        volumes = r.json()['volumes']
+        log.info('%d volumes found with tag %s', len(volumes), args.tag)
+        services = [
+                { 'name': 'droplets', 'devices': droplets },
+                { 'name': 'volumes', 'devices': volumes}
+            ]
+        for service in services:
+            for device in service['devices']:
+                r = api('get', args.token, '{}/{}/snapshots'.format(service['name'],device['id']))
+                # Filter out non-autosnapshots
+                prefix = args.prefix.replace('$do', device['name'])
+                snapshots = [snapshot for snapshot in r.json()['snapshots'] if prefix in snapshot['name']]
+                log.info('%d autosnapshots found for %s %s', len(snapshots), service['name'], device['name'])
+                process_device(args, device, service['name'], snapshots, policies, min_age, prefix, now)
     else:
         # Dummy droplet for the simulation
         droplet = {'id': 0, 'name': 'simulated'}
