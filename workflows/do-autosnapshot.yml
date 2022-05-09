@@ -1,10 +1,17 @@
 name: DO Autosnapshot
 on:
   push:
+    branches: [ master ]
   schedule:
     - cron:  '0 0/15 4 ? * * *'
 jobs:
   run-script:
-    runs-on: python/3-alpine
+    runs-on: ubuntu-latest
     steps:
-      - run: python3 do-snapshot.py --token ${{ secrets.DO_TOKEN }} -s 1d -k 3d:1d -k 1w:1w -k 1m:2m -k 0d:6m
+      - uses: actions/checkout@v3
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v3
+        with:
+          python-version: 3.10
+      - name : take snapshot
+        run: python3 do-snapshot.py --token ${{ secrets.DO_TOKEN }} -s 1d -k 3d:1d -k 1w:1w -k 1m:2m -k 0d:6m
